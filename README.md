@@ -85,6 +85,5 @@ build a shortcut with "Get Input from Share Sheet" (accepting text, urls, or ima
 ## notes
 
 - this is completely free since i'm using groq's free tiered models but go ahead and tweak if you would like but i rlly dont think it's necessary
-- don't worry about leaking your api key — it's saved in ios keychain, on device only
-- can't set native reminders on created events, that's a scriptable limitation. the notification you get just confirms the event was added
-- since this is manually triggered per-share, duplicate events aren't really a concern
+- don't worry about leaking your api key. it's saved in ios keychain, on device only
+  
