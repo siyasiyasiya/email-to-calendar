@@ -6,7 +6,7 @@
 
 <br />
 
-**a a scriptable script that turns any text, link, or image into a calendar event. powered by groq's free llm api. works with any calendar on your device.**
+**a scriptable script that turns any text, link, or image into a calendar event. powered by groq's free llm api. works with any calendar on your device.**
 
 </div>
 
@@ -14,7 +14,7 @@
 
 ## why
 
-i'm fiercely loyal to the apple ecosystem and love using apple calendar. unfortunately, i also get lazy to go out of my way and create an event for everything in my life. even more unfortunately, apple intelligence should be helping with this, but it doesn't. so i decided i had enough and just built my own tool that i use now.  
+i'm fiercely loyal to the apple ecosystem and love using apple calendar. unfortunately, i also get lazy to go out of my way and create an event for everything in my life. even more unfortunately, apple intelligence should be helping with this, but it doesn't. so i decided i had enough and just built my own tool that i use now.
 
 ## what it does
 
@@ -51,10 +51,10 @@ local notification confirms it's done
 ## setup
 
 1. install [Scriptable](https://scriptable.app/) (free, ios/ipados)
-2. create a new script, paste in `SchedulingMonkey.js`, name it exactly `SchedulingMonkey`
+2. on your phone, tap `scheduling _monkey.scriptable` in this repo — it'll open directly in Scriptable and import the script automatically. alternatively, create a new script manually and paste in `SchedulingMonkey.js`, named exactly `SchedulingMonkey`
 3. grab a free groq api key at [console.groq.com/keys](https://console.groq.com/keys) - no credit card needed
 4. run it once. on first run it'll ask you to:
-   - paste your Groq API key (stored in ios keychain, on-device only)
+   - paste your groq api key (stored in ios keychain, on-device only)
    - pick which calendar new events go to
 
 ---
@@ -84,6 +84,7 @@ build a shortcut with "Get Input from Share Sheet" (accepting text, urls, or ima
 
 ## notes
 
-- this is completely free since i'm using groq's free tiered models but go ahead and tweak if you would like but i rlly dont think it's necessary. 
-- don't worry about leaking your api key its saved in ios keychain and on device only. 
-- the
+- this is completely free since i'm using groq's free tiered models but go ahead and tweak if you would like but i rlly dont think it's necessary
+- don't worry about leaking your api key — it's saved in ios keychain, on device only
+- can't set native reminders on created events, that's a scriptable limitation. the notification you get just confirms the event was added
+- since this is manually triggered per-share, duplicate events aren't really a concern
