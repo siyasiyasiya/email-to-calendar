@@ -1,7 +1,8 @@
 // Email → Apple Calendar Bridge
-// Run via a Shortcut's "Run Script" action, passing the email text in as input.
-// Uses the Anthropic API to extract event details, then creates the event with
-// Scriptable's native Calendar API (EventKit) — no CalDAV/app passwords needed.
+// Accepts either a shared link (fetches and reads the page) or pasted/shared text
+// (an email body). Extracts event details with an LLM (Groq, free tier), then
+// creates the event with Scriptable's native Calendar API (EventKit) — no
+// CalDAV/app passwords needed.
 
 const KEYCHAIN_API_KEY = "email_calendar_bridge_api_key";
 const KEYCHAIN_CALENDAR_NAME = "email_calendar_bridge_calendar_name";
@@ -49,23 +50,54 @@ async function pickCalendar() {
   return chosen;
 }
 
-// --- Call Claude to extract structured event details from the email text ---
-async function extractEventFromEmail(emailText, apiKey) {
+const LINK_TEXT_MAX_CHARS = 3000; // cap how much of the fetched page we keep
+
+// --- Strip HTML down to rough plain text (no DOM parser available in Scriptable) ---
+function htmlToPlainText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// --- Fetch a page and return cleaned plain text ---
+async function fetchLinkText(url) {
+  const req = new Request(url);
+  req.timeoutInterval = 10;
+  const html = await req.loadString();
+  const text = htmlToPlainText(html);
+  if (!text) throw new Error("Fetched the page but couldn't extract any readable text from it.");
+  return text.slice(0, LINK_TEXT_MAX_CHARS);
+}
+
+// --- Call Claude to extract structured event details from text (email or a fetched webpage) ---
+async function extractEventFromText(sourceText, apiKey) {
   const todayISO = new Date().toISOString().split("T")[0];
 
-  const systemPrompt = `You extract calendar event details from emails. Respond with ONLY valid JSON, no other text and no markdown fences, in exactly this shape:
-{"is_event": boolean, "title": string, "start": "YYYY-MM-DDTHH:MM:SS", "end": "YYYY-MM-DDTHH:MM:SS" or null, "location": string or null, "confidence": number between 0 and 1}
+  const systemPrompt = `You extract calendar event details from a piece of text, which may be an email or the text of a webpage (e.g. an event registration page). Respond with ONLY valid JSON, no other text and no markdown fences, in exactly this shape:
+{"is_event": boolean, "title": string, "start": "YYYY-MM-DDTHH:MM:SS", "end": "YYYY-MM-DDTHH:MM:SS" or null, "timezone": "IANA timezone name" or null, "location": string or null, "notes": string or null, "confidence": number between 0 and 1}
 
 Rules:
-- If the email does not describe a specific event with a real date/time (e.g. it's a newsletter, receipt with no event, or generic announcement), set "is_event": false and leave other fields as empty strings or null.
+- If the text does not describe a specific event with a real date/time (e.g. it's a newsletter, receipt with no event, or generic page content), set "is_event": false and leave other fields as empty strings or null.
 - If no explicit year is given, assume the nearest future occurrence relative to today.
 - If no end time is given, set "end" to null (the caller will default to a 1-hour event).
+- "start" and "end" should be the plain wall-clock time as stated in the text (no UTC offset) — timezone handling is separate.
+- "timezone" should be an IANA timezone identifier (e.g. "America/New_York", "Europe/London", "Asia/Tokyo") if the text states or clearly implies one — a named zone abbreviation like "EST"/"PST", a city, an address, or context like a specific venue location. If nothing indicates a timezone, set it to null and the device's local timezone will be used.
+- "notes" should capture anything useful that doesn't fit title/start/end/location — confirmation numbers, dial-in links or meeting codes, what to bring, dress code, agenda items, prices, contact info, cancellation policy, etc. Write it as short plain-text lines, not a copy-paste of the source. Omit navigation menus, footers, unsubscribe links, and marketing filler. If there's nothing worth keeping beyond the core fields, set "notes" to null.
 - "confidence" should reflect how certain you are about the date/time specifically, not just whether an event exists.
 - Today's date is ${todayISO}.`;
 
   // Groq's free tier: no cost, no credit card, rate-limited but way more than
   // enough for occasional manual runs. Trimming input keeps token count down.
-  const trimmedEmail = emailText.slice(0, 1500);
+  const trimmedText = sourceText.slice(0, 3000);
 
   const req = new Request("https://api.groq.com/openai/v1/chat/completions");
   req.method = "POST";
@@ -75,10 +107,10 @@ Rules:
   };
   req.body = JSON.stringify({
     model: GROQ_MODEL,
-    max_tokens: 300,
+    max_tokens: 500,
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: trimmedEmail },
+      { role: "user", content: trimmedText },
     ],
   });
 
@@ -100,6 +132,17 @@ Rules:
   }
 }
 
+// --- Convert a naive "wall clock" time in a given IANA timezone to a correct UTC Date ---
+// Handles DST correctly because it asks the system for the real offset at that
+// specific date, rather than assuming a fixed offset for the zone.
+function zonedTimeToUtc(dateTimeStr, timeZone) {
+  const naiveUtc = new Date(dateTimeStr + "Z"); // treat the wall-clock numbers as if they were UTC, as a reference point
+  const asZoned = new Date(naiveUtc.toLocaleString("en-US", { timeZone }));
+  const asUtc = new Date(naiveUtc.toLocaleString("en-US", { timeZone: "UTC" }));
+  const offset = asZoned.getTime() - asUtc.getTime();
+  return new Date(naiveUtc.getTime() - offset);
+}
+
 // --- Fire a local notification (shows up like any other app notification) ---
 async function notify(title, body) {
   const n = new Notification();
@@ -110,26 +153,47 @@ async function notify(title, body) {
 
 // --- Create the actual calendar event ---
 async function createCalendarEvent(details, calendar) {
+  const timeZone = details.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
   const event = new CalendarEvent();
   event.title = details.title;
   event.calendar = calendar;
-  event.startDate = new Date(details.start);
+  event.timeZone = timeZone;
+  event.startDate = zonedTimeToUtc(details.start, timeZone);
   event.endDate = details.end
-    ? new Date(details.end)
-    : new Date(new Date(details.start).getTime() + 60 * 60 * 1000); // default 1hr
+    ? zonedTimeToUtc(details.end, timeZone)
+    : new Date(event.startDate.getTime() + 60 * 60 * 1000); // default 1hr
   if (details.location) event.location = details.location;
+  if (details.notes) event.notes = details.notes;
   await event.save();
 }
 
 // --- Main ---
 async function main() {
-  const emailText = args.plainTexts[0] || args.shortcutParameter;
-  if (!emailText) {
-    throw new Error("No email text received — make sure the Shortcut passes email content into this script's input.");
+  // Accept a URL shared directly (via Share Sheet as a URL, or "Get URLs from Input"
+  // in the Shortcut), or plain/pasted text (an email body).
+  const sharedUrl = (args.urls && args.urls[0]) || null;
+  const rawInput = args.plainTexts[0] || args.shortcutParameter;
+  const trimmedInput = rawInput ? rawInput.trim() : null;
+  const isBareLink = trimmedInput && /^https?:\/\/\S+$/i.test(trimmedInput);
+
+  const linkToFetch = sharedUrl || (isBareLink ? trimmedInput : null);
+
+  let sourceText;
+  if (linkToFetch) {
+    try {
+      sourceText = await fetchLinkText(linkToFetch);
+    } catch (e) {
+      throw new Error(`Couldn't fetch that link: ${e.message}`);
+    }
+  } else if (rawInput) {
+    sourceText = rawInput;
+  } else {
+    throw new Error("No link or text received — share a URL or paste event text into the Shortcut.");
   }
 
   const apiKey = await getApiKey();
-  const details = await extractEventFromEmail(emailText, apiKey);
+  const details = await extractEventFromText(sourceText, apiKey);
 
   if (!details.is_event) {
     Script.setShortcutOutput("No event detected in this email.");
@@ -145,7 +209,9 @@ async function main() {
   } else {
     const alert = new Alert();
     alert.title = "Confirm This Event?";
-    alert.message = `${details.title}\n${details.start}${details.location ? "\n" + details.location : ""}\n\nConfidence: ${Math.round(details.confidence * 100)}% — low enough that I wanted to check first.`;
+    const notesPreview = details.notes ? `\n\nNotes:\n${details.notes}` : "";
+    const tzNote = details.timezone ? ` (${details.timezone})` : "";
+    alert.message = `${details.title}\n${details.start}${tzNote}${details.location ? "\n" + details.location : ""}${notesPreview}\n\nConfidence: ${Math.round(details.confidence * 100)}% — low enough that I wanted to check first.`;
     alert.addAction("Add to Calendar");
     alert.addCancelAction("Skip");
     const idx = await alert.presentAlert();
