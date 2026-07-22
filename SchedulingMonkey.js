@@ -1,15 +1,14 @@
 // Email → Apple Calendar Bridge
 // Accepts a shared image (flyer/ticket/screenshot), a shared link (fetches and
 // reads the page), or pasted/shared text (an email body). Extracts event
-// details with an LLM (Groq, free tier — vision model for images, text model
-// otherwise), then creates the event with Scriptable's native Calendar API
+// details with an LLM (Groq, free tier), then creates the event with
+// Scriptable's native Calendar API
 // (EventKit) — no CalDAV/app passwords needed.
 
 const KEYCHAIN_API_KEY = "email_calendar_bridge_api_key";
 const KEYCHAIN_CALENDAR_NAME = "email_calendar_bridge_calendar_name";
 const CONFIDENCE_THRESHOLD = 0.75; // below this, ask before adding
-const GROQ_TEXT_MODEL = "llama-3.3-70b-versatile"; // free tier, no cost
-const GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"; // free tier, handles images
+const GROQ_MODEL = "qwen/qwen3.6-27b"; // free tier, handles text and images
 
 // --- Setup: API key (stored once, locally, on this device) ---
 async function getApiKey() {
@@ -113,7 +112,7 @@ async function extractEventFromText(sourceText, apiKey) {
     "Authorization": "Bearer " + apiKey,
   };
   req.body = JSON.stringify({
-    model: GROQ_TEXT_MODEL,
+    model: GROQ_MODEL,
     max_tokens: 500,
     response_format: { type: "json_object" },
     messages: [
@@ -141,7 +140,7 @@ async function extractEventFromImage(image, apiKey) {
     "Authorization": "Bearer " + apiKey,
   };
   req.body = JSON.stringify({
-    model: GROQ_VISION_MODEL,
+    model: GROQ_MODEL,
     max_tokens: 500,
     response_format: { type: "json_object" },
     messages: [
